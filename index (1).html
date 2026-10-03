@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>VaultCorp Portal — CTF</title>
+<!-- debug: c2VjcmV0PWN0ZjIwMjQ= -->
+<style>
+:root{
+  --bg:#0f1117; --panel:#171a23; --border:#2a2f3d; --text:#e6e8ee; --muted:#8891a7;
+  --accent:#5ee0b5; --warn:#f3c969; --bad:#ff6b6b; --mono:'SFMono-Regular',Consolas,monospace;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+:root:not([data-theme="light"]){ }
+:root[data-theme="light"]{ --bg:#f5f6fa; --panel:#fff; --border:#dde1ea; --text:#1b1e27; --muted:#5b6478; }
+*{box-sizing:border-box;}
+html,body{height:100%;}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,Segoe UI,Roboto,sans-serif;display:flex;justify-content:center;padding:24px 16px 48px;}
+.wrap{max-width:640px;width:100%;}
+h1{font-size:1.3rem;margin:0 0 4px;}
+.sub{color:var(--muted);font-size:.9rem;margin-bottom:20px;}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px;}
+.stage{display:flex;align-items:center;gap:10px;font-size:.85rem;color:var(--muted);margin-bottom:10px;}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--border);flex-shrink:0;}
+.dot.done{background:var(--accent);}
+.dot.active{background:var(--warn);}
+input{width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:.95rem;margin-bottom:8px;}
+button{background:var(--accent);color:#06281d;border:none;padding:10px 16px;border-radius:8px;font-weight:600;cursor:pointer;font-size:.9rem;}
+button.ghost{background:transparent;border:1px solid var(--border);color:var(--text);font-weight:500;}
+.msg{font-size:.85rem;margin-top:8px;}
+.msg.bad{color:var(--bad);}
+.msg.ok{color:var(--accent);}
+.mono{font-family:var(--mono);font-size:.8rem;background:var(--bg);border:1px solid var(--border);padding:10px;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;}
+.flag{font-family:var(--mono);font-size:1rem;color:var(--accent);background:var(--bg);border:1px solid var(--accent);padding:14px;border-radius:8px;text-align:center;margin-top:10px;}
+details{margin-top:10px;color:var(--muted);font-size:.85rem;}
+summary{cursor:pointer;color:var(--text);}
+.hidden{display:none;}
+a.reset{color:var(--muted);font-size:.8rem;cursor:pointer;text-decoration:underline;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🔐 VaultCorp Internal Portal</h1>
+  <div class="sub">Reach the admin panel. Objective, not method — figure out how.</div>
+
+  <div class="card">
+    <div class="stage"><div class="dot" id="d1"></div>Stage 1 — Authenticate</div>
+    <div class="stage"><div class="dot" id="d2"></div>Stage 2 — Verify OTP</div>
+    <div class="stage"><div class="dot" id="d3"></div>Stage 3 — Session role</div>
+    <div class="stage"><div class="dot" id="d4"></div>Stage 4 — Admin access</div>
+  </div>
+
+  <div class="card" id="loginCard">
+    <div id="loginForm">
+      <input id="u" placeholder="Username" value="guest">
+      <input id="p" placeholder="Password" type="password" value="guest">
+      <button onclick="doLogin()">Sign in</button>
+      <div class="msg" id="loginMsg"></div>
+    </div>
+    <div id="otpForm" class="hidden">
+      <p class="sub">An OTP was sent to your device.</p>
+      <input id="otpInput" placeholder="6-digit OTP">
+      <button onclick="checkOtp()">Verify</button>
+      <div class="msg" id="otpMsg"></div>
+    </div>
+  </div>
+
+  <div class="card hidden" id="portalCard">
+    <p>Welcome, <b id="whoami"></b>. Your role: <code id="roleShown"></code></p>
+    <p class="sub">Only admins can open the vault.</p>
+    <button onclick="tryVault()">Open Vault</button>
+    <div class="msg" id="vaultMsg"></div>
+  </div>
+
+  <div class="card hidden" id="flagCard">
+    <div class="flag" id="flagText"></div>
+  </div>
+
+  <details>
+    <summary>Hints (click to reveal, one at a time)</summary>
+    <ol>
+      <li>Open DevTools before you log in. Watch the Network tab as you submit the OTP form — not every request needs a real server.</li>
+      <li>After OTP verification, check <code>document.cookie</code> in the Console. Does that value look plain, or encoded?</li>
+      <li>Try decoding it (<code>atob(...)</code>). Once you know the format, can you set a different cookie value yourself?</li>
+      <li>Getting into the portal as "admin" by cookie isn't the whole challenge — the vault checks a signed token too. View the page source (Ctrl+U) for anything odd near the top.</li>
+      <li>That odd comment is base64. Decode it — it tells you what kind of secret to look for and its value.</li>
+      <li>With the secret and algorithm (HS256) known, forge a JWT with <code>{"role":"admin"}</code> using any online tool like jwt.io, and store it: <code>localStorage.setItem('token', YOUR_JWT)</code>. Then click "Open Vault" again.</li>
+    </ol>
+  </details>
+
+  <p><a class="reset" onclick="resetAll()">Reset challenge</a></p>
+</div>
+
+<script>
+let realOtp = null;
+
+function setDot(id, state){ document.getElementById(id).className = 'dot ' + state; }
+function refreshDots(){
+  setDot('d1', localStorage.getItem('stage1') ? 'done' : 'active');
+  setDot('d2', localStorage.getItem('stage2') ? 'done' : (localStorage.getItem('stage1') ? 'active' : ''));
+  setDot('d3', localStorage.getItem('stage3') ? 'done' : (localStorage.getItem('stage2') ? 'active' : ''));
+  setDot('d4', localStorage.getItem('stage4') ? 'done' : (localStorage.getItem('stage3') ? 'active' : ''));
+}
+
+function doLogin(){
+  const u = document.getElementById('u').value, p = document.getElementById('p').value;
+  if(u !== 'guest' || p !== 'guest'){
+    document.getElementById('loginMsg').textContent = 'Invalid credentials. Try guest/guest.';
+    document.getElementById('loginMsg').className = 'msg bad';
+    return;
+  }
+  localStorage.setItem('stage1','1');
+  document.getElementById('loginForm').classList.add('hidden');
+  document.getElementById('otpForm').classList.remove('hidden');
+  refreshDots();
+  sendOtp();
+}
+
+function sendOtp(){
+  realOtp = String(Math.floor(100000 + Math.random()*900000));
+  const payload = JSON.stringify({status:"sent", otp: realOtp, expires_in: 120});
+  const blob = new Blob([payload], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  // Visible in Network tab as a real request/response
+  fetch(url).then(r => r.json()).then(() => {
+    document.getElementById('otpMsg').textContent = 'OTP dispatched.';
+    document.getElementById('otpMsg').className = 'msg';
+  });
+}
+
+function checkOtp(){
+  const val = document.getElementById('otpInput').value.trim();
+  if(val !== realOtp){
+    document.getElementById('otpMsg').textContent = 'Incorrect OTP.';
+    document.getElementById('otpMsg').className = 'msg bad';
+    return;
+  }
+  localStorage.setItem('stage2','1');
+  document.cookie = "role=" + btoa("user") + "; path=/";
+  showPortal();
+}
+
+function showPortal(){
+  document.getElementById('loginCard').classList.add('hidden');
+  document.getElementById('portalCard').classList.remove('hidden');
+  refreshDots();
+  updateRoleDisplay();
+}
+
+function getCookie(name){
+  const m = document.cookie.match(new RegExp('(^| )'+name+'=([^;]+)'));
+  return m ? m[2] : null;
+}
+
+function decodedRole(){
+  const raw = getCookie('role');
+  if(!raw) return null;
+  try { return atob(raw); } catch(e){ return raw; }
+}
+
+function updateRoleDisplay(){
+  const role = decodedRole() || 'unknown';
+  document.getElementById('whoami').textContent = 'guest';
+  document.getElementById('roleShown').textContent = role;
+  if(role === 'admin') localStorage.setItem('stage3','1');
+  refreshDots();
+}
+
+function base64urlToBuffer(b64url){
+  let b64 = b64url.replace(/-/g,'+').replace(/_/g,'/');
+  while(b64.length % 4) b64 += '=';
+  const bin = atob(b64);
+  const buf = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) buf[i] = bin.charCodeAt(i);
+  return buf;
+}
+
+async function verifyJWT(token, secret){
+  const parts = token.split('.');
+  if(parts.length !== 3) return false;
+  try{
+    const data = parts[0] + '.' + parts[1];
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), {name:'HMAC', hash:'SHA-256'}, false, ['verify']);
+    const sig = base64urlToBuffer(parts[2]);
+    const ok = await crypto.subtle.verify('HMAC', key, sig, new TextEncoder().encode(data));
+    if(!ok) return false;
+    const payloadJson = atob(parts[1].replace(/-/g,'+').replace(/_/g,'/').padEnd(parts[1].length + (4 - parts[1].length % 4) % 4, '='));
+    const payload = JSON.parse(payloadJson);
+    return payload.role === 'admin';
+  } catch(e){ return false; }
+}
+
+async function tryVault(){
+  updateRoleDisplay();
+  const role = decodedRole();
+  const msgEl = document.getElementById('vaultMsg');
+  if(role !== 'admin'){
+    msgEl.textContent = 'Access denied: session role is not admin.';
+    msgEl.className = 'msg bad';
+    return;
+  }
+  const token = localStorage.getItem('token');
+  if(!token){
+    msgEl.textContent = 'Role is admin, but no valid admin token found in localStorage("token").';
+    msgEl.className = 'msg bad';
+    return;
+  }
+  const valid = await verifyJWT(token, 'ctf2024');
+  if(!valid){
+    msgEl.textContent = 'Token present but signature/role check failed.';
+    msgEl.className = 'msg bad';
+    return;
+  }
+  localStorage.setItem('stage4','1');
+  document.getElementById('portalCard').classList.add('hidden');
+  document.getElementById('flagCard').classList.remove('hidden');
+  document.getElementById('flagText').textContent = 'CTF{n3tw0rk_c00ki3_jwt_tr1pl3_th4nk5}';
+  refreshDots();
+}
+
+function resetAll(){
+  localStorage.clear();
+  document.cookie = 'role=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+  location.reload();
+}
+
+// Restore state on load
+(function init(){
+  if(localStorage.getItem('stage2')) showPortal();
+  refreshDots();
+})();
+</script>
+</body>
+</html>
